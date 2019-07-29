@@ -1,7 +1,12 @@
 package mapreduce
 
 import (
+	"encoding/json"
+	"fmt"
 	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"os"
 )
 
 func doMap(
@@ -53,6 +58,38 @@ func doMap(
 	//
 	// Your code here (Part I).
 	//
+
+	// Read the file content
+	content, err := ioutil.ReadFile(inFile)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Read map input file %s failed", inFile))
+	}
+
+	// Call the user custom map function
+	mapped := mapF(inFile, string(content))
+
+	// Marshal the key value list into the temp files
+	grouped := make(map[int][]KeyValue)
+	for _, e := range mapped {
+		index := ihash(e.Key) % nReduce
+		grouped[index] = append(grouped[index], e)
+	}
+
+	for index, e := range grouped {
+		func() {
+			file, err := os.Create(reduceName(jobName, mapTask, index))
+			defer file.Close()
+			if err != nil {
+				log.Fatalf("create reduce file failed, %s", err.Error())
+			}
+
+			enc := json.NewEncoder(file)
+			err = enc.Encode(e)
+			if err != nil {
+				log.Fatalf("encode reduce file failed, %s", err.Error())
+			}
+		}()
+	}
 }
 
 func ihash(s string) int {
