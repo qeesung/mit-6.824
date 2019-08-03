@@ -50,7 +50,6 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 				taskChan <- strconv.Itoa(i)
 			}
 		}
-		close(taskChan) // all task scheduled
 	}()
 
 	var taskIndex int32
@@ -87,7 +86,11 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 					atomic.AddInt32(&taskIndex, 1)
 					err = workerClient.Call("Worker.DoTask", taskArg, nil)
 					if err != nil {
-						log.Fatal(err.Error())
+						// reschedule the task to other worker
+						go func() {
+							taskChan <- task
+						}()
+						continue
 					}
 					wg.Done()
 				}
@@ -95,6 +98,7 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 		}
 	}()
 	wg.Wait()
+	close(taskChan)
 
 	fmt.Printf("Schedule: %v done\n", phase)
 }
