@@ -118,6 +118,7 @@ func TestFailAgree2B(t *testing.T) {
 	// follower network disconnection
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
+	DPrintf("!!!!!! 目前服务器leader为%d, 并将服务器%d 停机", leader, (leader+1)%servers)
 
 	// agree despite one disconnected server?
 	cfg.one(102, servers-1, false)
@@ -128,10 +129,13 @@ func TestFailAgree2B(t *testing.T) {
 
 	// re-connect
 	cfg.connect((leader + 1) % servers)
+	DPrintf("!!!!!! 目前服务器leader为%d, 并将服务器%d 恢复", leader, (leader+1)%servers)
 
 	// agree with full set of servers?
 	cfg.one(106, servers, true)
+	DPrintf("!!!!! 结束106啦啦啦啦啦")
 	time.Sleep(RaftElectionTimeout)
+	DPrintf("!!!!! 开始107啦啦啦啦啦")
 	cfg.one(107, servers, true)
 
 	cfg.end()
@@ -151,6 +155,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
+	DPrintf("!!!!!!大部分服务器已经断开了")
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
@@ -171,7 +176,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.connect((leader + 1) % servers)
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
-
+	DPrintf("!!!!!!大部分服务器已经恢复了")
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
 	leader2 := cfg.checkOneLeader()
@@ -234,6 +239,7 @@ loop:
 		for j := 0; j < servers; j++ {
 			if t, _ := cfg.rafts[j].GetState(); t != term {
 				// term changed -- can't expect low RPC counts
+				DPrintf("term changed -- can't expect low RPC counts, %v --> %v", t, term)
 				continue loop
 			}
 		}
@@ -341,29 +347,39 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
+	DPrintf("!!!!!!大部分服务器已经断开")
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader1].Start(rand.Int())
+		//cfg.rafts[leader1].Start(rand.Int())
+		cfg.rafts[leader1].Start(i)
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
 
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
+	DPrintf("!!!!!!!分区1的服务器都失去连接(%d, %d)", leader1%servers, (leader1+1)%servers)
 
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
+	DPrintf("!!!!!!!分区2的服务器都恢复连接(%d, %d, %d)",
+		(leader1+2)%servers,
+		(leader1+3)%servers,
+		(leader1+4)%servers,
+	)
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		//cfg.one(rand.Int(), 3, true)
+		cfg.one(50+i, 3, true)
 	}
 
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
+	DPrintf("!!!!!!目前的leader为%d", leader2)
 	other := (leader1 + 2) % servers
 	if leader2 == other {
 		other = (leader2 + 1) % servers
@@ -371,13 +387,20 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect(other)
 
 	// lots more commands that won't commit
+	DPrintf("!!!!!! lots more commands that won't commit")
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader2].Start(rand.Int())
+		//cfg.rafts[leader2].Start(rand.Int())
+		cfg.rafts[leader2].Start(i + 100)
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
 
 	// bring original leader back to life,
+	DPrintf("!!!!!! bring original leader back to life, %d, %d, %d",
+		(leader1+0)%servers,
+		(leader1+1)%servers,
+		other,
+	)
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
@@ -385,12 +408,15 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
 
-	// lots of successful commands to new group.
+	// lots of successful commands to new group.   !!!!!!!
+	DPrintf("!!!!!! lots of successful commands to new group.")
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		//cfg.one(rand.Int(), 3, true)
+		cfg.one(i+150, 3, true)
 	}
 
 	// now everyone
+	DPrintf("!!!!!! now everyone")
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
