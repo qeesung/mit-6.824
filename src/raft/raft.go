@@ -102,6 +102,7 @@ func (baseState *BaseState) candidate() {
 						rf.VotedFor = -1 // 取消对自己的投票
 						rf.state = newFollowerState(rf)
 						rf.timerReset <- struct{}{}
+						rf.persist()
 						return
 					}
 
@@ -182,6 +183,7 @@ func (baseState *BaseState) appendEntries() {
 						rf.VotedFor = -1 // 取消对自己的投票
 						rf.state = newFollowerState(rf)
 						rf.timerReset <- struct{}{} // 马上重置当前的Timer，避免成为Follower以后马上超时
+						rf.persist()
 						return
 					}
 
@@ -211,7 +213,8 @@ func (baseState *BaseState) appendEntries() {
 
 					// 开始检查从commitIndex之后开始的matchIndex, 检查是否可以提交
 					nextCommitIndex := rf.CommitIndex
-					for i := rf.CommitIndex + 1; i <= len(rf.Logs); i++ {
+					//for i := rf.CommitIndex + 1; i <= len(rf.Logs); i++ {
+					for i := len(rf.Logs) - 1; i > rf.CommitIndex; i-- {
 						committedPeerCount := 1 // 包括自己
 						for key, value := range rf.MatchIndex {
 							if key == rf.me {
@@ -225,17 +228,13 @@ func (baseState *BaseState) appendEntries() {
 						}
 
 						// 检测是否大多数服务器都已经提交了，如果是，那么服务器就可以开始提交了
-						if committedPeerCount >= len(rf.peers)/2+1 {
+						if committedPeerCount >= len(rf.peers)/2+1 && rf.Logs[i].Term == rf.CurrentTerm {
 							nextCommitIndex = i
-						} else {
-							// 当前的日志还没有发送到大多数的服务器上面去
 							break
 						}
 					}
 
-					if nextCommitIndex != rf.CommitIndex {
-						rf.CommitIndex = nextCommitIndex
-					}
+					rf.CommitIndex = nextCommitIndex
 				}
 			}(peerIndex)
 		}
@@ -285,6 +284,7 @@ func (state *FollowerState) voteTimeout() {
 	state.raft.VotedFor = state.raft.me                 // 为自己投票
 	state.raft.state = newCandidateState(state.raft)
 	state.candidate()
+	state.raft.persist()
 }
 
 type Role int
@@ -434,19 +434,14 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
-
+	//DPrintf("######>>>> 服务器 %d 开始持久化配置， Current term %d, vote for %d, 日志为(日志长度为%d, %+v) %v",
+	//	rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Logs), rf.Logs[len(rf.Logs)-1], rf.Logs)
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
 	e.Encode(rf.VotedFor)
 	e.Encode(rf.Logs)
 
-	e.Encode(rf.CommitIndex)
-	e.Encode(rf.LastApplied)
-
-	e.Encode(rf.NextIndex)
-	e.Encode(rf.MatchIndex)
-	e.Encode(rf.state.currentRole())
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -490,47 +485,10 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
-	var CurrentTerm int
-	var VotedFor int
-	var logs []LogEntry
-
-	if d.Decode(&CurrentTerm) != nil && d.Decode(&VotedFor) != nil && d.Decode(&logs) != nil {
-		rf.CurrentTerm = CurrentTerm
-		rf.VotedFor = VotedFor
-		rf.Logs = logs
-	}
-
-	var CommitIndex int
-	var LastAppliedIndex int
-	if d.Decode(&CommitIndex) != nil && d.Decode(&LastAppliedIndex) != nil {
-		rf.CommitIndex = CommitIndex
-		rf.LastApplied = LastAppliedIndex
-	}
-
-	var NextIndex map[int]int
-	var MatchIndex map[int]int
-	if d.Decode(&NextIndex) != nil && d.Decode(&MatchIndex) != nil {
-		rf.NextIndex = NextIndex
-		rf.MatchIndex = MatchIndex
-	}
-
-	var role Role
-	if d.Decode(&role) != nil {
-		if role.isLeader() {
-			rf.state = newLeaderState(rf)
-			return
-		}
-
-		if role.isCandidate() {
-			rf.state = newCandidateState(rf)
-			return
-		}
-
-		if role.isFollower() {
-			rf.state = newFollowerState(rf)
-			return
-		}
-	}
+	d.Decode(&rf.CurrentTerm)
+	d.Decode(&rf.VotedFor)
+	d.Decode(&rf.Logs)
+	DPrintf("######<<<<< 服务器 %d 加载配置成功, 当前的任期为%d, VotedFor 为%d, 日志为(长度为%d) %v", rf.me, rf.CommitIndex, rf.VotedFor, len(rf.Logs), rf.Logs)
 }
 
 type AppendEntriesArgs struct {
@@ -590,6 +548,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.CurrentTerm = args.Term
 		rf.VotedFor = -1
 		rf.state = newFollowerState(rf)
+		rf.persist()
+	}
+
+	if rf.state.currentRole().isLeader() {
+		rf.VotedFor = -1
+		rf.state = newFollowerState(rf)
+		rf.persist()
+	}
+
+	if rf.VotedFor != args.LeaderId {
+		rf.VotedFor = args.LeaderId
+		rf.persist()
 	}
 
 	rf.timerReset <- struct{}{}
@@ -619,7 +589,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				// 对应位置处的日志不相等，清除该日志，以及以后的日志, 并append自己
 				rf.Logs = rf.Logs[:appendStartIndex]
 				rf.Logs = append(rf.Logs, LogEntry{Term: logEntry.Term, Command: logEntry.Command, ResultChan: logEntry.ResultChan})
-				continue
+				//continue
 			}
 			// 日志已经存在了，什么都不做
 		} else {
@@ -632,17 +602,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	lastLogIndex := len(rf.Logs) - 1
-	if args.LeaderCommit > lastLogIndex {
-		if rf.CommitIndex < lastLogIndex {
+	if args.LeaderCommit > rf.CommitIndex {
+		if args.LeaderCommit > lastLogIndex {
 			rf.CommitIndex = lastLogIndex
-		}
-	} else {
-		if rf.CommitIndex < args.LeaderCommit {
+		} else {
 			rf.CommitIndex = args.LeaderCommit
 		}
 	}
 	//DPrintf("+++++++++ (%d)leader commit 为%d, append index 为%d, log length 为%d, 更新commit index 为 %d", rf.me, args.LeaderCommit, appendStartIndex, len(rf.Logs), rf.CommitIndex)
-
+	rf.persist()
 }
 
 func (rf *Raft) startAppendEntriesThread() {
@@ -701,9 +669,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 检查日志是否至少和自己一样新
 		currentLastLogIndex := len(rf.Logs) - 1
 		currentLastLogTerm := rf.Logs[currentLastLogIndex].Term
-		if currentLastLogTerm < args.LastLogTerm {
-			reply.VoteGranted = true
-		} else if currentLastLogTerm == args.LastLogTerm && args.LastLogIndex >= currentLastLogIndex {
+		DPrintf("current last log index %d, last log term %d, args %+v", currentLastLogIndex, currentLastLogTerm, args)
+		if (currentLastLogTerm == args.LastLogTerm && args.LastLogIndex >= currentLastLogIndex) ||
+			currentLastLogTerm < args.LastLogTerm {
+			rf.VotedFor = args.CandidateId
+			rf.state = newFollowerState(rf)
+			rf.resetTimer()
 			reply.VoteGranted = true
 		} else {
 			reply.VoteGranted = false
@@ -711,6 +682,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		reply.VoteGranted = false
 	}
+
+	rf.persist()
 }
 
 func (rf *Raft) startTimeoutVoteThread() {
@@ -806,11 +779,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// 马上开始推送日志
 	//rf.appendReset <- struct{}{}
 	if !isLeader {
+		rf.persist()
 		return index, term, isLeader
 	}
 
 	DPrintf("请求命令%v成功，对应的index为%d，term为%d", command, len(rf.Logs)-1, rf.CurrentTerm)
 	isLeader = rf.state.currentRole().isLeader()
+	rf.persist()
 	return len(rf.Logs) - 1, rf.CurrentTerm, isLeader
 }
 
@@ -860,6 +835,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.appendReset = make(chan struct{})
 
 	rf.applyChan = applyCh
+
+	rf.readPersist(persister.ReadRaftState())
 
 	go rf.startTimeoutVoteThread()   // 启动超时线程
 	go rf.startAppendEntriesThread() // 启动心跳线程

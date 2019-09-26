@@ -638,6 +638,7 @@ func TestPersist32C(t *testing.T) {
 
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 2) % servers)
+	DPrintf("断开服务器连接 %d", (leader+2)%servers)
 
 	cfg.one(102, 2, true)
 
@@ -732,7 +733,7 @@ func TestUnreliableAgree2C(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	for iters := 1; iters < 50; iters++ {
+	for iters := 1; iters < 20; iters++ {
 		for j := 0; j < 4; j++ {
 			wg.Add(1)
 			go func(iters, j int) {
@@ -762,8 +763,10 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.one(rand.Int()%10000, 1, true)
 
 	nup := servers
-	for iters := 0; iters < 1000; iters++ {
-		if iters == 200 {
+	for iters := 0; iters < 100; iters++ {
+		DPrintf("$$$$!!!!!! iter %d", iters)
+		if iters == 20 {
+			DPrintf("…………………………开始乱序了")
 			cfg.setlongreordering(true)
 		}
 		leader := -1
@@ -783,6 +786,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
+			DPrintf("+++++++++ 断开服务器%d连接", leader)
 			cfg.disconnect(leader)
 			nup -= 1
 		}
@@ -790,6 +794,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if nup < 3 {
 			s := rand.Int() % servers
 			if cfg.connected[s] == false {
+				DPrintf("++++---+++ 恢复服务器%d的连接", s)
 				cfg.connect(s)
 				nup += 1
 			}
@@ -798,6 +803,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	for i := 0; i < servers; i++ {
 		if cfg.connected[i] == false {
+			DPrintf("++++---+++ 恢复服务器%d的连接", i)
 			cfg.connect(i)
 		}
 	}
