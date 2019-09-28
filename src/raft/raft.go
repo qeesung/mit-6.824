@@ -155,11 +155,12 @@ func (baseState *BaseState) appendEntries() {
 				rf.mu.Lock()
 				prevLogIndex := rf.NextIndex[peer] - 1
 				prevLogTerm := rf.Logs[prevLogIndex].Term
-				entries := make([]LogEntry, 0)
-				if len(rf.Logs)-1 >= rf.NextIndex[peer] {
-					// Leader收到新的请求了，需要追加nextIndex之后的日志
-					entries = append(entries, rf.Logs[rf.NextIndex[peer]])
-				}
+				//entries := make([]LogEntry, 0)
+				//if len(rf.Logs)-1 >= rf.NextIndex[peer] {
+				//	// Leader收到新的请求了，需要追加nextIndex之后的日志
+				//	entries = append(entries, rf.Logs[rf.NextIndex[peer]])
+				//}
+				entries := rf.Logs[rf.NextIndex[peer]:]
 				DPrintf("服务器%d开始append日志%v到服务器%d，nextIndex:%v, matchIndex:%v, commitIndex: %v, applyIndex: %v",
 					rf.me, entries, peer, rf.NextIndex, rf.MatchIndex, rf.CommitIndex, rf.LastApplied)
 				rf.mu.Unlock()
@@ -201,9 +202,20 @@ func (baseState *BaseState) appendEntries() {
 					// 检测PreLog是否匹配
 					// 这里收到过时的响应怎么办？NextIndex和MatchIndex的值岂不是会有问题？？？
 					if !reply.Success {
-						DPrintf("服务器%d和Leader %d的日志不匹配", peer, rf.me)
+						DPrintf("服务器%d和Leader %d的日志不匹配, conflict index : %d, conflict term : %d", peer, rf.me, reply.ConflictIndex, reply.ConflictTerm)
 						// PreLog不匹配，较少nextIndex，并稍后重试
-						rf.NextIndex[peer] = prevLogIndex
+						if reply.ConflictTerm == -1 {
+							rf.NextIndex[peer] = reply.ConflictIndex
+						} else {
+							i := prevLogIndex - 1
+							for ; i >= 0 && rf.Logs[i].Term != reply.ConflictTerm; i-- {
+							}
+							if i < 0 {
+								rf.NextIndex[peer] = reply.ConflictIndex
+							} else {
+								rf.NextIndex[peer] = i + 1
+							}
+						}
 					} else {
 						// PreLog匹配，发送nextIndex开始对应的日志
 						rf.MatchIndex[peer] = prevLogIndex + len(entries)
@@ -503,6 +515,9 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+
+	ConflictIndex int
+	ConflictTerm  int
 }
 
 //
@@ -571,6 +586,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 如果日志的长度没有PreLogIndex指定的长度长
 		// 或者在PreLogIndex位置处的日志任期不匹配
 		reply.Success = false
+		if args.PrevLogIndex > currentLogLength-1 {
+			// 如果是日志长度不足
+			reply.ConflictIndex = currentLogLength
+			reply.ConflictTerm = -1
+		} else {
+			// 如果是日志长度相同，那么就存在冲突的日志
+			reply.ConflictTerm = rf.Logs[args.PrevLogIndex].Term
+			// 一次越过整个term
+			i := args.PrevLogIndex
+			for ; i >= 0 && rf.Logs[i].Term == reply.ConflictTerm; i-- {
+			}
+			reply.ConflictIndex = i + 1
+		}
 		return
 	}
 
