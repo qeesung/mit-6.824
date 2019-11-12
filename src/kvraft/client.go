@@ -1,13 +1,17 @@
 package raftkv
 
-import "labrpc"
+import (
+	"labrpc"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
-
+import "github.com/satori/go.uuid"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leader int
 }
 
 func nrand() int64 {
@@ -39,7 +43,38 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	ticket := UUID()
+	index := ck.leader
+	for {
+		currentLeader := index % len(ck.servers)
+		DPrintf("[client]客户端准备从服务器 查询 KEY '%s', UUID '%s'", key, ticket)
+		reply := GetReply{}
+		args := GetArgs{Key: key, Ticket: ticket}
+		ok := ck.servers[currentLeader].Call("KVServer.Get", &args, &reply)
+		index++
+
+		if !ok {
+			DPrintf("[client]客户端GET KEY '%s' UUID '%s' 到服务器 %d 失败", key, args.Ticket, currentLeader)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if reply.WrongLeader {
+			DPrintf("[client]客户端GET KEY '%s' UUID '%s' 到服务器 %d 失败, 错误的leader", key, args.Ticket, currentLeader)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if reply.Err != "" {
+			DPrintf("[client]客户端GET KEY '%s' UUID '%s' 到服务器 %d 失败, %s", key, args.Ticket, currentLeader, reply.Err)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		ck.leader = currentLeader
+		DPrintf("[client]客户端查询key %s 成功，UUID '%s' 值为 %s", key, args.Ticket, reply.Value)
+		return reply.Value
+	}
 }
 
 //
@@ -54,6 +89,39 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+
+	ticket := UUID()
+	index := ck.leader
+	for {
+		DPrintf("[client]准备%s '%s'到Key %s, Ticket %s, 服务器%d", op, value, key, ticket, index%len(ck.servers))
+		currentLeader := index % len(ck.servers)
+		reply := PutAppendReply{WrongLeader: false}
+		args := PutAppendArgs{Key: key, Value: value, Op: op, Ticket: ticket}
+		ok := ck.servers[currentLeader].Call("KVServer.PutAppend", &args, &reply)
+		index++
+
+		if !ok {
+			DPrintf("[client]客户端PutAppend %s 到服务器 %d 失败", args.Ticket, currentLeader)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if reply.WrongLeader {
+			DPrintf("[client]客户端PutAppend %s 到服务器 %d 失败，错误的Leader", args.Ticket, currentLeader)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if reply.Err != "" {
+			DPrintf("[client]客户端GET KEY '%s' UUID '%s' 到服务器 %d 失败, %s", key, args.Ticket, currentLeader, reply.Err)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		DPrintf("[client]客户端PutAppend %s 到服务器 %d 成功", args.Ticket, currentLeader)
+		ck.leader = currentLeader
+		return
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -61,4 +129,9 @@ func (ck *Clerk) Put(key string, value string) {
 }
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
+}
+
+func UUID() string {
+	id, _ := uuid.NewV4()
+	return id.String()
 }

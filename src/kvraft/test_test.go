@@ -6,7 +6,6 @@ import "testing"
 import "strconv"
 import "time"
 import "math/rand"
-import "log"
 import "strings"
 import "sync"
 import "sync/atomic"
@@ -193,6 +192,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
+			DPrintf("******* client %d is started", cli)
 			j := 0
 			defer func() {
 				clnts[cli] <- j
@@ -203,18 +203,21 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			for atomic.LoadInt32(&done_clients) == 0 {
 				if (rand.Int() % 1000) < 500 {
 					nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
-					// log.Printf("%d: client new append %v\n", cli, nv)
+					//log.Printf("[client]%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv)
+					//log.Printf("[client]%d: client new append done\n", cli)
 					last = NextValue(last, nv)
 					j++
 				} else {
-					// log.Printf("%d: client new get %v\n", cli, key)
+					//log.Printf("[client]%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key)
+					//log.Printf("[client]%d: client new get value %v\n", cli, v)
 					if v != last {
-						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+					//	log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
 					}
 				}
 			}
+			DPrintf("$$$$$$$ client %d is exit", cli)
 		})
 
 		if partitions {
@@ -224,6 +227,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		}
 		time.Sleep(5 * time.Second)
 
+		DPrintf("~~~~~~~~~~~~~||||||||||")
 		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
@@ -258,13 +262,16 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		// log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
 			// log.Printf("read from clients %d\n", i)
+			DPrintf("wait... %d ", i)
 			j := <-clnts[i]
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
 			key := strconv.Itoa(i)
 			// log.Printf("Check %v for client %d\n", j, i)
+			DPrintf("get... %d", i)
 			v := Get(cfg, ck, key)
+			DPrintf("get done... %d -> %s", i, v)
 			checkClntAppends(t, i, v, j)
 		}
 

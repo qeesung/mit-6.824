@@ -61,6 +61,7 @@ func (baseState *BaseState) applyInterval() {
 				CommandValid: true,
 				Command:      logEntry.Command,
 				CommandIndex: i,
+				CommandTerm:  logEntry.Term,
 			}
 		}
 	}
@@ -334,6 +335,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 }
 
 type LogEntry struct {
