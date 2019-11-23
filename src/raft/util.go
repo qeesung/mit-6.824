@@ -11,3 +11,12 @@ func DPrintf(format string, a ...interface{}) {
 	}
 	return
 }
+
+const SDebug = 1
+
+func SDPrintf(format string, a ...interface{}) {
+	if SDebug > 0 {
+		log.Printf("++++++++++++++"+format, a...)
+	}
+	return
+}

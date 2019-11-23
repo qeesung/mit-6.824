@@ -1,6 +1,7 @@
 package raftkv
 
 import (
+	"bytes"
 	"labgob"
 	"labrpc"
 	"log"
@@ -10,7 +11,7 @@ import (
 	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {
@@ -104,7 +105,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	key := args.Key
 	op := Op{Key: key, Type: opType, Value: args.Value, Ticket: args.Ticket, ID: UUID()}
-
 	index, term, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.WrongLeader = true
@@ -135,6 +135,33 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 }
 
+func (kv *KVServer) buildSnapshotIfNeed(index int) {
+	DPrintf("/////////[%d]准备开始创建Snapshot index %d ...", kv.me, index)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if kv.maxraftstate == -1 {
+		return
+	}
+
+	DPrintf("=========================>>> [%d]开始Snapshot %d", kv.me, index)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.Database)
+	data := w.Bytes()
+	kv.rf.BuildSnapshot(index, data, kv.maxraftstate)
+	DPrintf("\\\\\\\\\\\\\\[%d]准备开始创建Snapshot %d 完成...", kv.me, index)
+}
+
+func (kv *KVServer) loadSnapshot(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	d.Decode(&kv.Database)
+}
+
 //
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. you are not required to do anything
@@ -148,6 +175,10 @@ func (kv *KVServer) Kill() {
 
 func (kv *KVServer) applyOp() {
 	for applyMsg := range kv.applyCh {
+		if applyMsg.IsSnapshot {
+			kv.loadSnapshot(applyMsg.SnapshotData)
+			return
+		}
 		op := applyMsg.Command.(Op)
 		func() {
 			kv.mu.Lock()
@@ -210,6 +241,7 @@ func (kv *KVServer) applyOp() {
 				callback(nil, "", applyTerm)
 			}
 		}()
+		go kv.buildSnapshotIfNeed(applyMsg.CommandIndex)
 	}
 }
 
