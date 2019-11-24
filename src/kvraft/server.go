@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {
@@ -30,11 +30,11 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Type   OpType
-	Key    string
-	Value  string // If required
-	Ticket string
-	ID     string
+	Type     OpType
+	Key      string
+	Value    string // If required
+	Ticket   string
+	ClientId string
 }
 
 type KVServer struct {
@@ -48,13 +48,13 @@ type KVServer struct {
 	// Your definitions here.
 	OpCallbacks map[string]func(error, string, int)
 	Database    map[string]string
-	Tickets     map[string]bool
+	Tickets     map[string]string
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	key := args.Key
-	op := Op{Type: GET, Key: key, Ticket: args.Ticket, ID: UUID()}
+	op := Op{Type: GET, Key: key, Ticket: args.Ticket, ClientId: args.ClientId}
 	// register the callback
 	done := make(chan bool)
 	index, term, isLeader := kv.rf.Start(op)
@@ -104,7 +104,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	// Your code here.
 	key := args.Key
-	op := Op{Key: key, Type: opType, Value: args.Value, Ticket: args.Ticket, ID: UUID()}
+	op := Op{Key: key, Type: opType, Value: args.Value, Ticket: args.Ticket, ClientId: args.ClientId}
 	index, term, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.WrongLeader = true
@@ -136,23 +136,30 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 }
 
 func (kv *KVServer) buildSnapshotIfNeed(index int) {
-	DPrintf("/////////[%d]准备开始创建Snapshot index %d ...", kv.me, index)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	if kv.maxraftstate == -1 {
 		return
 	}
 
-	DPrintf("=========================>>> [%d]开始Snapshot %d", kv.me, index)
+	if kv.rf.StateSize() < kv.maxraftstate {
+		//DPrintf("skip snapshot, raft server %d current state size is %d, less that %d, skip snapshot",
+		//	kv.rf.Me(), kv.rf.StateSize(), kv.maxraftstate)
+		return
+	}
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(kv.Database)
+	e.Encode(kv.Tickets)
 	data := w.Bytes()
 	kv.rf.BuildSnapshot(index, data, kv.maxraftstate)
-	DPrintf("\\\\\\\\\\\\\\[%d]准备开始创建Snapshot %d 完成...", kv.me, index)
 }
 
 func (kv *KVServer) loadSnapshot(data []byte) {
+	if data == nil || len(data) == 0 {
+		return
+	}
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -160,6 +167,7 @@ func (kv *KVServer) loadSnapshot(data []byte) {
 	d := labgob.NewDecoder(r)
 
 	d.Decode(&kv.Database)
+	d.Decode(&kv.Tickets)
 }
 
 //
@@ -177,7 +185,8 @@ func (kv *KVServer) applyOp() {
 	for applyMsg := range kv.applyCh {
 		if applyMsg.IsSnapshot {
 			kv.loadSnapshot(applyMsg.SnapshotData)
-			return
+			DPrintf("KV Server %d加载snapshot数据成功, 加载以后数据为%+v", kv.rf.Me(), kv.Database)
+			continue
 		}
 		op := applyMsg.Command.(Op)
 		func() {
@@ -190,8 +199,8 @@ func (kv *KVServer) applyOp() {
 
 			DPrintf("操作%+v完成, apply到数据库中", applyMsg)
 			defer func() {
-				DPrintf("apply操作%+v到数据库中完成, 当前的数据库为 %+v", op, kv.Database)
-				kv.Tickets[ticket] = true
+				DPrintf("KV Server %d apply操作%+v到数据库中完成, 当前的数据库为 %+v", kv.rf.Me(), op, kv.Database)
+				kv.Tickets[op.ClientId] = op.Ticket
 			}()
 
 			var callback = func(err error, value string, term int) {}
@@ -201,7 +210,7 @@ func (kv *KVServer) applyOp() {
 			}
 
 			duplicate := false
-			if _, ok := kv.Tickets[ticket]; ok {
+			if latestTicket := kv.Tickets[op.ClientId]; latestTicket == op.Ticket {
 				duplicate = true
 			}
 
@@ -241,7 +250,7 @@ func (kv *KVServer) applyOp() {
 				callback(nil, "", applyTerm)
 			}
 		}()
-		go kv.buildSnapshotIfNeed(applyMsg.CommandIndex)
+		kv.buildSnapshotIfNeed(applyMsg.CommandIndex)
 	}
 }
 
@@ -271,20 +280,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 	kv.OpCallbacks = make(map[string]func(error, string, int))
 	kv.Database = make(map[string]string)
-	kv.Tickets = make(map[string]bool)
+	kv.Tickets = make(map[string]string)
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg, 1000)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.loadSnapshot(persister.ReadSnapshot())
 	// You may need initialization code here.
 	go kv.applyOp()
-
-	go func() {
-		for {
-			DPrintf("((((()))))) %d -> %+v", me, kv.OpCallbacks)
-			time.Sleep(1 * time.Second)
-		}
-	}()
 
 	return kv
 }

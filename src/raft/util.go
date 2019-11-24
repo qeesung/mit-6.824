@@ -12,7 +12,7 @@ func DPrintf(format string, a ...interface{}) {
 	return
 }
 
-const SDebug = 1
+const SDebug = 0
 
 func SDPrintf(format string, a ...interface{}) {
 	if SDebug > 0 {

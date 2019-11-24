@@ -2,28 +2,21 @@ package raftkv
 
 import (
 	"labrpc"
+	"math/rand"
 	"time"
 )
-import "crypto/rand"
-import "math/big"
-import "github.com/satori/go.uuid"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
+	Id      string
 	// You will have to modify this struct.
 	leader int
-}
-
-func nrand() int64 {
-	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return x
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.Id = UUID()
 	// You'll have to add code here.
 	return ck
 }
@@ -49,7 +42,7 @@ func (ck *Clerk) Get(key string) string {
 		currentLeader := index % len(ck.servers)
 		DPrintf("[client]客户端准备从服务器 查询 KEY '%s', UUID '%s'", key, ticket)
 		reply := GetReply{}
-		args := GetArgs{Key: key, Ticket: ticket}
+		args := GetArgs{Key: key, Ticket: ticket, ClientId: ck.Id}
 		ok := ck.servers[currentLeader].Call("KVServer.Get", &args, &reply)
 		index++
 
@@ -96,7 +89,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		DPrintf("[client]准备%s '%s'到Key %s, Ticket %s, 服务器%d", op, value, key, ticket, index%len(ck.servers))
 		currentLeader := index % len(ck.servers)
 		reply := PutAppendReply{WrongLeader: false}
-		args := PutAppendArgs{Key: key, Value: value, Op: op, Ticket: ticket}
+		args := PutAppendArgs{Key: key, Value: value, Op: op, Ticket: ticket, ClientId: ck.Id}
 		ok := ck.servers[currentLeader].Call("KVServer.PutAppend", &args, &reply)
 		index++
 
@@ -131,7 +124,13 @@ func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }
 
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
 func UUID() string {
-	id, _ := uuid.NewV4()
-	return id.String()
+	n := 6
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
 }
