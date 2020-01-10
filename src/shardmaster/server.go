@@ -1,11 +1,13 @@
 package shardmaster
 
-
-import "raft"
+import (
+	"raft"
+	"strconv"
+	"time"
+)
 import "labrpc"
 import "sync"
 import "labgob"
-
 
 type ShardMaster struct {
 	mu      sync.Mutex
@@ -15,31 +17,180 @@ type ShardMaster struct {
 
 	// Your data here.
 
-	configs []Config // indexed by config num
+	configs     []Config // indexed by config num
+	OpCallbacks map[string]func(error, interface{}, int)
+	Tickets     map[string]string
 }
 
+type OpType string
+
+const QUERY OpType = "QUERY"
+const JOIN OpType = "JOIN"
+const LEAVE OpType = "LEAVE"
+const MOVE OpType = "MOVE"
 
 type Op struct {
 	// Your data here.
+	Type     OpType
+	Ticket   string
+	ClientId string
+	Args     interface{}
 }
 
+func (sm *ShardMaster) doRaft(opType OpType, args Args, reply Reply) {
+	op := Op{Type: opType, Ticket: args.ticket(), ClientId: args.clientId()}
+	switch opType {
+	case JOIN:
+		op.Args = args.(*JoinArgs).Servers
+	case LEAVE:
+		op.Args = args.(*LeaveArgs).GIDs
+	case MOVE:
+		op.Args = args.(*MoveArgs).MoveShardArgs
+	case QUERY:
+		op.Args = args.(*QueryArgs).Num
+	}
+	done := make(chan bool)
+	index, term, isLeader := sm.rf.Start(op)
+	if !isLeader {
+		reply.markWrongLeader()
+		return
+	}
+	sm.mu.Lock()
+	sm.OpCallbacks[strconv.Itoa(index)] = func(err error, values interface{}, applyTerm int) {
+		if err != nil {
+			reply.setCauseErr(Err(err.Error()))
+			close(done)
+			return
+		}
+
+		if term != applyTerm { // wrong leader
+			reply.markWrongLeader()
+		} else {
+			if opType == QUERY {
+				queryReplay := reply.(*QueryReply)
+				queryReplay.Config = values.(Config)
+			}
+		}
+		close(done)
+	}
+	sm.mu.Unlock()
+
+	select {
+	case <-done:
+		DPrintf("操作%+v RPC成功", op)
+	case <-time.After(3 * time.Second):
+		reply.setCauseErr("timeout...")
+		DPrintf("操作%+v RPC超时", op)
+	}
+}
 
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
-	// Your code here.
+	sm.doRaft(JOIN, args, reply)
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
-	// Your code here.
+	sm.doRaft(LEAVE, args, reply)
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
-	// Your code here.
+	sm.doRaft(MOVE, args, reply)
 }
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
-	// Your code here.
+	sm.doRaft(QUERY, args, reply)
 }
 
+func (sm *ShardMaster) applyOp() {
+	for applyMsg := range sm.applyCh {
+		//if true {
+		//	fmt.Printf("-----------------> %+v\n", applyMsg.Command)
+		//	continue
+		//}
+		op := applyMsg.Command.(Op)
+		func() {
+			sm.mu.Lock()
+			defer sm.mu.Unlock()
+			//ticket := op.Ticket
+			applyTerm := applyMsg.CommandTerm
+			applyIndex := applyMsg.CommandIndex
+
+			DPrintf("操作%+v完成, apply到数据库中", applyMsg)
+			defer func() {
+				DPrintf("ShardMaster %d apply操作%+v到数据库中完成, 当前的数据库为 %+v", sm.rf.Me(), op, sm.configs)
+				sm.Tickets[op.ClientId] = op.Ticket
+			}()
+
+			var callback = func(err error, values interface{}, term int) {}
+			if ck, ok := sm.OpCallbacks[strconv.Itoa(applyIndex)]; ok {
+				callback = ck
+				delete(sm.OpCallbacks, strconv.Itoa(applyIndex))
+			}
+
+			duplicate := false
+			if latestTicket := sm.Tickets[op.ClientId]; latestTicket == op.Ticket {
+				duplicate = true
+			}
+
+			args := op.Args
+			switch op.Type {
+			case QUERY:
+				num := args.(int)
+				var config Config
+				if num == -1 || num >= len(sm.configs) {
+					config = sm.configs[len(sm.configs)-1]
+				} else {
+					config = sm.configs[num]
+				}
+				callback(nil, config, applyTerm)
+			case JOIN:
+				if duplicate {
+					callback(nil, nil, applyTerm)
+				}
+				servers := op.Args.(map[int][]string)
+				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				for groupId, serverList := range servers {
+					newConfig.Groups[groupId] = serverList
+				}
+				newConfig.Num = len(sm.configs)
+				sm.configs = append(sm.configs, reShardConfig(newConfig))
+			case LEAVE:
+				if duplicate {
+					callback(nil, nil, applyTerm)
+				}
+				groupIds := op.Args.([]int)
+				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				for _, leaveGroupId := range groupIds {
+					delete(newConfig.Groups, leaveGroupId)
+				}
+				newConfig.Num = len(sm.configs)
+				sm.configs = append(sm.configs, reShardConfig(newConfig))
+			case MOVE:
+				if duplicate {
+					callback(nil, nil, applyTerm)
+				}
+				moveShardArgs := op.Args.(MoveShardArgs)
+				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				newConfig.Shards[moveShardArgs.Shard] = moveShardArgs.GID
+				newConfig.Num = len(sm.configs)
+				sm.configs = append(sm.configs, newConfig)
+			}
+		}()
+	}
+}
+
+func reShardConfig(config Config) Config {
+	groupCount := len(config.Groups)
+	groupIds := make([]int, 0)
+	for groupId := range config.Groups {
+		groupIds = append(groupIds, groupId)
+	}
+
+	for shardIndex := range config.Shards {
+		groupIndex := shardIndex % groupCount
+		config.Shards[shardIndex] = groupIds[groupIndex]
+	}
+	return config
+}
 
 //
 // the tester calls Kill() when a ShardMaster instance won't
@@ -71,10 +222,14 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.configs[0].Groups = map[int][]string{}
 
 	labgob.Register(Op{})
-	sm.applyCh = make(chan raft.ApplyMsg)
+	// You may need initialization code here.
+	sm.OpCallbacks = make(map[string]func(error, interface{}, int))
+	sm.Tickets = make(map[string]string)
+
+	sm.applyCh = make(chan raft.ApplyMsg, 1000)
 	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
 
-	// Your code here.
+	go sm.applyOp()
 
 	return sm
 }
