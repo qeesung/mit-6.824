@@ -42,7 +42,7 @@ func copyConfig(srcConfig Config) Config {
 
 	for key, value := range srcConfig.Groups {
 		newValue := make([]string, len(value))
-		copy(value, newValue)
+		copy(newValue, value)
 		newConfig.Groups[key] = newValue
 	}
 	return newConfig

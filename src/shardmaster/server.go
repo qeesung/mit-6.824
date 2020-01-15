@@ -1,6 +1,7 @@
 package shardmaster
 
 import (
+	"log"
 	"raft"
 	"strconv"
 	"time"
@@ -48,6 +49,8 @@ func (sm *ShardMaster) doRaft(opType OpType, args Args, reply Reply) {
 		op.Args = args.(*MoveArgs).MoveShardArgs
 	case QUERY:
 		op.Args = args.(*QueryArgs).Num
+	default:
+		log.Fatal("Illegal put append op type...")
 	}
 	done := make(chan bool)
 	index, term, isLeader := sm.rf.Start(op)
@@ -102,10 +105,6 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 
 func (sm *ShardMaster) applyOp() {
 	for applyMsg := range sm.applyCh {
-		//if true {
-		//	fmt.Printf("-----------------> %+v\n", applyMsg.Command)
-		//	continue
-		//}
 		op := applyMsg.Command.(Op)
 		func() {
 			sm.mu.Lock()
@@ -153,6 +152,7 @@ func (sm *ShardMaster) applyOp() {
 				}
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, reShardConfig(newConfig))
+				callback(nil, nil, applyTerm)
 			case LEAVE:
 				if duplicate {
 					callback(nil, nil, applyTerm)
@@ -164,6 +164,7 @@ func (sm *ShardMaster) applyOp() {
 				}
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, reShardConfig(newConfig))
+				callback(nil, nil, applyTerm)
 			case MOVE:
 				if duplicate {
 					callback(nil, nil, applyTerm)
@@ -173,6 +174,7 @@ func (sm *ShardMaster) applyOp() {
 				newConfig.Shards[moveShardArgs.Shard] = moveShardArgs.GID
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, newConfig)
+				callback(nil, nil, applyTerm)
 			}
 		}()
 	}
@@ -180,6 +182,9 @@ func (sm *ShardMaster) applyOp() {
 
 func reShardConfig(config Config) Config {
 	groupCount := len(config.Groups)
+	if groupCount == 0 {
+		return config
+	}
 	groupIds := make([]int, 0)
 	for groupId := range config.Groups {
 		groupIds = append(groupIds, groupId)
@@ -222,6 +227,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.configs[0].Groups = map[int][]string{}
 
 	labgob.Register(Op{})
+	labgob.Register(map[int][]string{})
+	labgob.Register(MoveShardArgs{})
 	// You may need initialization code here.
 	sm.OpCallbacks = make(map[string]func(error, interface{}, int))
 	sm.Tickets = make(map[string]string)
