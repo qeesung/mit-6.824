@@ -189,7 +189,9 @@ func reShardConfig(config Config) Config {
 	for groupId := range config.Groups {
 		groupIds = append(groupIds, groupId)
 	}
-
+	// 注意golang的map遍历是随机的, 遍历group以后，排序抱枕每次group的顺序都是一致的
+	sort.Ints(groupIds)
+	
 	for shardIndex := range config.Shards {
 		groupIndex := shardIndex % groupCount
 		config.Shards[shardIndex] = groupIds[groupIndex]
