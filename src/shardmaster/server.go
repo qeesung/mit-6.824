@@ -1,8 +1,14 @@
 package shardmaster
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"fmt"
+	"github.com/qeesung/src/shardmaster"
+	"hash/fnv"
 	"log"
 	"raft"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -149,6 +155,13 @@ func (sm *ShardMaster) applyOp() {
 				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
 				for groupId, serverList := range servers {
 					newConfig.Groups[groupId] = serverList
+
+					// assign shards without replica group to this replica group.
+					for i := 0; i < NShards; i++ {
+						if newConfig.Shards[i] == 0 {
+							newConfig.Shards[i] = groupId
+						}
+					}
 				}
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, reShardConfig(newConfig))
@@ -161,6 +174,30 @@ func (sm *ShardMaster) applyOp() {
 				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
 				for _, leaveGroupId := range groupIds {
 					delete(newConfig.Groups, leaveGroupId)
+					// assign shards without replica group to this replica group.
+				}
+				stayGid := 0
+				for gid := range newConfig.Groups {
+					stay := true
+					for _, deletedGid := range groupIds {
+						if gid == deletedGid {
+							stay = false
+						}
+					}
+					if stay {
+						stayGid = gid
+						break
+					}
+				}
+
+				for _, gid := range groupIds {
+					// assign shards whose replica group will leave to the stay group.
+					for i := 0; i < len(newConfig.Shards); i++ {
+						if newConfig.Shards[i] == gid {
+							newConfig.Shards[i] = stayGid
+						}
+					}
+					delete(newConfig.Groups, gid)
 				}
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, reShardConfig(newConfig))
@@ -181,6 +218,54 @@ func (sm *ShardMaster) applyOp() {
 }
 
 func reShardConfig(config Config) Config {
+	gidToShards := make(map[int][]int)
+	for gid := range config.Groups {
+		gidToShards[gid] = make([]int, 0)
+	}
+	for shard, gid := range config.Shards {
+		gidToShards[gid] = append(gidToShards[gid], shard)
+	}
+
+	if len(config.Groups) == 0 {
+		// no replica group
+		for i := 0; i < len(config.Shards); i++ {
+			config.Shards[i] = 0
+		}
+	} else {
+		mean := NShards / len(config.Groups)
+		numToMove := 0
+		for _, shards := range gidToShards {
+			if len(shards) > mean {
+				numToMove += len(shards) - mean
+			}
+		}
+		for i := 0; i < numToMove; i++ {
+			// each time move a shard from replica group with most shards to replica
+			// gorup with fewest shards.
+			srcGid, dstGid := getGidPairToMove(gidToShards)
+			N := len(gidToShards[srcGid]) - 1
+			config.Shards[gidToShards[srcGid][N]] = dstGid
+			gidToShards[dstGid] = append(gidToShards[dstGid], gidToShards[srcGid][N])
+			gidToShards[srcGid] = gidToShards[srcGid][:N]
+		}
+	}
+	return config
+}
+
+func getGidPairToMove(gidToShards map[int][]int) (int, int) {
+	srcGid, dstGid := 0, 0
+	for gid, shards := range gidToShards {
+		if srcGid == 0 || len(gidToShards[srcGid]) < len(shards) {
+			srcGid = gid
+		}
+		if dstGid == 0 || len(gidToShards[dstGid]) > len(shards) {
+			dstGid = gid
+		}
+	}
+	return srcGid, dstGid
+}
+
+func reShardHashConsistencyConfig(config Config) Config {
 	groupCount := len(config.Groups)
 	if groupCount == 0 {
 		return config
@@ -191,12 +276,79 @@ func reShardConfig(config Config) Config {
 	}
 	// 注意golang的map遍历是随机的, 遍历group以后，排序抱枕每次group的顺序都是一致的
 	sort.Ints(groupIds)
-	
-	for shardIndex := range config.Shards {
-		groupIndex := shardIndex % groupCount
-		config.Shards[shardIndex] = groupIds[groupIndex]
+
+	//for shardIndex := range config.Shards {
+	//	groupIndex := shardIndex % groupCount
+	//	config.Shards[shardIndex] = groupIds[groupIndex]
+	//}
+	hashConsistencyCircle := calcHashConsistency(config)
+	groupShard := make([]int, 0)
+	for i := 0; i < NShards; i++ {
+		if hashConsistencyCircle[i] != -1 {
+			groupShard = append(groupShard, i)
+			targetGID := hashConsistencyCircle[i]
+			for _, shardIndex := range groupShard {
+				config.Shards[shardIndex] = targetGID
+			}
+			groupShard = make([]int, 0)
+		} else {
+			groupShard = append(groupShard, i)
+		}
+	}
+
+	if len(groupShard) != 0 {
+		// find the first
+		targetGID := -1
+		for i := 0; i < NShards; i++ {
+			if hashConsistencyCircle[i] != -1 {
+				targetGID = hashConsistencyCircle[i]
+			}
+		}
+
+		for _, shardIndex := range groupShard {
+			config.Shards[shardIndex] = targetGID
+		}
 	}
 	return config
+}
+
+func calcHashConsistency(config Config) [NShards]int {
+	result := [NShards]int{}
+	// initialize
+	for i := range result {
+		result[i] = -1
+	}
+	for gid := range config.Groups {
+		firstHash, secondHash, thirdHash := groupHashIndexes(gid)
+		result[firstHash] = gid
+		result[secondHash] = gid
+		result[thirdHash] = gid
+	}
+	DPrintf("Consistent Hash %+v", result)
+	return result
+}
+
+func groupHashIndexes(groupId int) (first, second, third uint32) {
+	return groupHashIndex(groupId, 0),
+		groupHashIndex(groupId, 1),
+		groupHashIndex(groupId, 2)
+}
+
+func groupHashIndex(groupId int, groupSubId int) uint32 {
+	groupFullName := fmt.Sprintf("group-%d#%d", groupId, groupSubId)
+	return hash(groupFullName) % shardmaster.NShards
+}
+
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(md5Hash(s)))
+	return h.Sum32()
+}
+
+func md5Hash(s string) string {
+	hasher := md5.New()
+	hasher.Write([]byte(s))
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 //
