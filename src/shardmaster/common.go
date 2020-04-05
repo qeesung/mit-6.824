@@ -33,7 +33,7 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
-func copyConfig(srcConfig Config) Config {
+func CopyConfig(srcConfig Config) Config {
 	newConfig := Config{
 		Num:    srcConfig.Num,
 		Shards: srcConfig.Shards,
@@ -143,7 +143,7 @@ func UUID() string {
 	return string(b)
 }
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {

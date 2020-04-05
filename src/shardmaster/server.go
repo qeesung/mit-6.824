@@ -150,9 +150,10 @@ func (sm *ShardMaster) applyOp() {
 			case JOIN:
 				if duplicate {
 					callback(nil, nil, applyTerm)
+					return
 				}
 				servers := op.Args.(map[int][]string)
-				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				newConfig := CopyConfig(sm.configs[len(sm.configs)-1])
 				for groupId, serverList := range servers {
 					newConfig.Groups[groupId] = serverList
 
@@ -169,9 +170,10 @@ func (sm *ShardMaster) applyOp() {
 			case LEAVE:
 				if duplicate {
 					callback(nil, nil, applyTerm)
+					return
 				}
 				groupIds := op.Args.([]int)
-				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				newConfig := CopyConfig(sm.configs[len(sm.configs)-1])
 				for _, leaveGroupId := range groupIds {
 					delete(newConfig.Groups, leaveGroupId)
 					// assign shards without replica group to this replica group.
@@ -205,9 +207,10 @@ func (sm *ShardMaster) applyOp() {
 			case MOVE:
 				if duplicate {
 					callback(nil, nil, applyTerm)
+					return
 				}
 				moveShardArgs := op.Args.(MoveShardArgs)
-				newConfig := copyConfig(sm.configs[len(sm.configs)-1])
+				newConfig := CopyConfig(sm.configs[len(sm.configs)-1])
 				newConfig.Shards[moveShardArgs.Shard] = moveShardArgs.GID
 				newConfig.Num = len(sm.configs)
 				sm.configs = append(sm.configs, newConfig)

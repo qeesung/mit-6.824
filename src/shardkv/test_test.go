@@ -1,6 +1,8 @@
 package shardkv
 
-import "linearizability"
+import (
+	"linearizability"
+)
 
 import "testing"
 import "strconv"
@@ -94,6 +96,7 @@ func TestJoinLeave(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	DPrintf("TTTTTTTTTTTTT Join the group 100")
 	cfg.join(0)
 
 	n := 10
@@ -102,24 +105,30 @@ func TestJoinLeave(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
+		DPrintf("TTTTTTTTTTTTT PUT the key %s and vale %s", ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTTTTTT Check the key %s and vale %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
+	DPrintf("TTTTTTTTTTTTT JOIN the group 101")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTTTTTT Check2 the key %s and vale %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(5)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTTTTTT Leave the group 100")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTTTTTT Check3 the key %s and vale %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(5)
 		ck.Append(ka[i], x)
@@ -133,6 +142,7 @@ func TestJoinLeave(t *testing.T) {
 	cfg.ShutdownGroup(0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTTTTTT Check4 the key %s and vale %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
@@ -147,6 +157,7 @@ func TestSnapshot(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	DPrintf("TTTTTTTTT Join the Group 100")
 	cfg.join(0)
 
 	n := 30
@@ -155,43 +166,60 @@ func TestSnapshot(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(20)
+		DPrintf("TTTTTTTTT Put the Key:%s and value:%s", ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check1 the Key:%s and value:%s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
+	DPrintf("TTTTTTTTT Join the Group 101")
 	cfg.join(1)
+	//time.Sleep(200 * time.Second)
+	DPrintf("TTTTTTTTT Join the Group 102")
 	cfg.join(2)
+	//time.Sleep(200 * time.Second)
+	DPrintf("TTTTTTTTT Leave the Group 100")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check2 the Key:%s and value:%s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
+		DPrintf("TTTTTTTTT Append1 the Key:%s with value %s:%s", ka[i], va[i], x)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTT Leave the Group 101")
 	cfg.leave(1)
+	DPrintf("TTTTTTTTT Join the group 100 again")
 	cfg.join(0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check3 the Key:%s and value:%s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
+		DPrintf("TTTTTTTTT Append2 the Key:%s with value %s:%s", ka[i], va[i], x)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTT Sleep 1 second")
 	time.Sleep(1 * time.Second)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check4 the Key:%s and value:%s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
+	DPrintf("TTTTTTTTT Sleep 1 second again")
 	time.Sleep(1 * time.Second)
 
 	cfg.checklogs()
 
+	DPrintf("TTTTTTTTT Showdown all servers and restart all servers")
 	cfg.ShutdownGroup(0)
 	cfg.ShutdownGroup(1)
 	cfg.ShutdownGroup(2)
@@ -201,6 +229,7 @@ func TestSnapshot(t *testing.T) {
 	cfg.StartGroup(2)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check5 the Key:%s and value:%s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
@@ -215,6 +244,7 @@ func TestMissChange(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	DPrintf("TTTTTTTTT Join the Group 100")
 	cfg.join(0)
 
 	n := 10
@@ -223,49 +253,65 @@ func TestMissChange(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(20)
+		DPrintf("TTTTTTTTT Put the key %s and value %s", ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check1 the key %s and value %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
+	DPrintf("TTTTTTTTT Join the Group 101")
 	cfg.join(1)
 
+	DPrintf("TTTTTTTTT Showdown all Server 0 ...")
 	cfg.ShutdownServer(0, 0)
 	cfg.ShutdownServer(1, 0)
 	cfg.ShutdownServer(2, 0)
 
+	DPrintf("TTTTTTTTT Join the 102")
 	cfg.join(2)
+	DPrintf("TTTTTTTTT Leave the 101")
 	cfg.leave(1)
+	DPrintf("TTTTTTTTT Leave the 100")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check2 the key %s and value %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
+		DPrintf("TTTTTTTTT Append the %s with %s:%s", ka[i], va[i], x)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTT Join the 101 again")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check3 the key %s and value %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
+		DPrintf("TTTTTTTTT Append2 the %s with %s:%s", ka[i], va[i], x)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTT Start all server ....")
 	cfg.StartServer(0, 0)
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check4 the key %s and value %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
+		DPrintf("TTTTTTTTT Append3 the %s with %s:%s", ka[i], va[i], x)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
 
+	DPrintf("TTTTTTTTT Sleep 2 seconds")
 	time.Sleep(2 * time.Second)
 
 	cfg.ShutdownServer(0, 1)
@@ -382,16 +428,19 @@ func TestConcurrent2(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	DPrintf("TTTTTTTTT Join the group 101")
 	cfg.join(1)
+	DPrintf("TTTTTTTTT Join the group 100")
 	cfg.join(0)
+	DPrintf("TTTTTTTTT Join the group 102")
 	cfg.join(2)
-
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(1)
+		DPrintf("TTTTTTTTT Put the key %s, value %s", ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
 
@@ -402,6 +451,7 @@ func TestConcurrent2(t *testing.T) {
 		defer func() { ch <- true }()
 		for atomic.LoadInt32(&done) == 0 {
 			x := randstring(1)
+			DPrintf("TTTTTTTTT [i:%d]Append the key %s, value %s:%s", i, ka[i], va[i], x)
 			ck1.Append(ka[i], x)
 			va[i] += x
 			time.Sleep(50 * time.Millisecond)
@@ -413,21 +463,31 @@ func TestConcurrent2(t *testing.T) {
 		go ff(i, ck1)
 	}
 
+	DPrintf("TTTTTTTTT Leave the group 100")
 	cfg.leave(0)
+	DPrintf("TTTTTTTTT Leave the group 102")
 	cfg.leave(2)
 	time.Sleep(3000 * time.Millisecond)
+	DPrintf("TTTTTTTTT Join the group 100 again")
 	cfg.join(0)
+	DPrintf("TTTTTTTTT Join the group 102 again")
 	cfg.join(2)
+	DPrintf("TTTTTTTTT Leave the group 101")
 	cfg.leave(1)
 	time.Sleep(3000 * time.Millisecond)
+	DPrintf("TTTTTTTTT Join the group 101 again")
 	cfg.join(1)
+	DPrintf("TTTTTTTTT Leave the group 100 again")
 	cfg.leave(0)
+	DPrintf("TTTTTTTTT Leave the group 102 again")
 	cfg.leave(2)
 	time.Sleep(3000 * time.Millisecond)
 
+	DPrintf("TTTTTTTTT Shutdown the group 100, 102")
 	cfg.ShutdownGroup(1)
 	cfg.ShutdownGroup(2)
 	time.Sleep(1000 * time.Millisecond)
+	DPrintf("TTTTTTTTT Start the group 100, 102")
 	cfg.StartGroup(1)
 	cfg.StartGroup(2)
 
@@ -439,6 +499,7 @@ func TestConcurrent2(t *testing.T) {
 	}
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTTTT Check3 the kv %s, va %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 
@@ -495,6 +556,7 @@ func TestUnreliable2(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+	DPrintf("TTTTTTT Join the group 100")
 	cfg.join(0)
 
 	n := 10
@@ -503,6 +565,7 @@ func TestUnreliable2(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
+		DPrintf("TTTTTTT Put the key %s, value %s", ka[i], va[i])
 		ck.Put(ka[i], va[i])
 	}
 
@@ -514,6 +577,7 @@ func TestUnreliable2(t *testing.T) {
 		ck1 := cfg.makeClient()
 		for atomic.LoadInt32(&done) == 0 {
 			x := randstring(5)
+			DPrintf("TTTTTTT [i: %d]Append the key %s, value %s:%s", i, ka[i], va[i], x)
 			ck1.Append(ka[i], x)
 			va[i] += x
 		}
@@ -544,6 +608,7 @@ func TestUnreliable2(t *testing.T) {
 	}
 
 	for i := 0; i < n; i++ {
+		DPrintf("TTTTTTT Check the key %s, value %s", ka[i], va[i])
 		check(t, ck, ka[i], va[i])
 	}
 

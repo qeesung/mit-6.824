@@ -686,8 +686,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.CurrentTerm
-	DPrintf("服务器%d(任期 %d)收到leader %d(任期 %d)的心跳请求, 当前服务器的commit index %d， apply index %d",
-		rf.me, rf.CurrentTerm, args.LeaderId, args.Term, rf.CommitIndex, rf.LastApplied)
+	DPrintf("服务器%d(任期 %d)收到leader %d(任期 %d)的心跳请求, 当前服务器的commit index %d， apply index %d, Entries %+v",
+		rf.me, rf.CurrentTerm, args.LeaderId, args.Term, rf.CommitIndex, rf.LastApplied, args.Entries)
 	if args.Term < rf.CurrentTerm {
 		reply.Success = false
 		return
@@ -751,7 +751,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// 判断已经存在的日志是否和将要append的日志向匹配, 如果匹配，那么跳过
 			// 这里只有不匹配的情况下才进行trim，否则会在收到过期的append请求的时候，发生错误的日志截断
 			currentLogEntry := rf.Logs[appendStartIndex-rf.SnapshotIndex]
-			if currentLogEntry.Term != logEntry.Term && currentLogEntry.Command != logEntry.Command {
+			if currentLogEntry.Term != logEntry.Term /*&& currentLogEntry.Command != logEntry.Command*/ {
 				// 对应位置处的日志不相等，清除该日志，以及以后的日志, 并append自己
 				rf.Logs = rf.Logs[:appendStartIndex-rf.SnapshotIndex]
 				rf.Logs = append(rf.Logs, LogEntry{Term: logEntry.Term, Command: logEntry.Command, ResultChan: logEntry.ResultChan})
